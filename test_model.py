@@ -334,7 +334,7 @@ def generate_response(
             # print(f"调试: 解码后的回复长度: {len(response)}, 内容（前200字符）: {response[:200] if len(response) > 200 else response}")
         else:
             # 助手标记之后内容太少，可能是误判，直接解码所有新生成的内容
-            print(f"调试: 助手标记位置 {generated_assistant_idx} 之后内容太少（{remaining_tokens}个token），可能是误判，直接解码所有新生成内容")
+            # print(f"调试: 助手标记位置 {generated_assistant_idx} 之后内容太少（{remaining_tokens}个token），可能是误判，直接解码所有新生成内容")
             response = tokenizer.decode(generated_ids, skip_special_tokens=True)
             # 清理可能的残留标记
             response = response.strip()
