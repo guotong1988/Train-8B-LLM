@@ -232,10 +232,10 @@ def generate_response(
     formatted_prompt = format_prompt(prompt, use_chat_template=use_chat_template, tokenizer=tokenizer)
     
     # 调试：打印格式化后的提示词（前200字符）
-    if len(formatted_prompt) > 200:
-        print(f"格式化后的提示词（前200字符）: {formatted_prompt[:200]}...")
-    else:
-        print(f"格式化后的提示词: {formatted_prompt}")
+    # if len(formatted_prompt) > 200:
+        # print(f"格式化后的提示词（前200字符）: {formatted_prompt[:200]}...")
+    # else:
+        # print(f"格式化后的提示词: {formatted_prompt}")
     
     # 编码输入
     inputs = tokenizer(formatted_prompt, return_tensors="pt").to(device)
@@ -275,8 +275,8 @@ def generate_response(
     
     # 调试信息：打印新生成部分的原始解码（用于诊断）
     generated_text_raw = tokenizer.decode(generated_ids, skip_special_tokens=False)
-    print(f"调试: 新生成部分（原始，前200字符）: {generated_text_raw[:200]}")
-    print(f"调试: 新生成部分token数量: {len(generated_ids)}")
+    # print(f"调试: 新生成部分（原始，前200字符）: {generated_text_raw[:200]}")
+    # print(f"调试: 新生成部分token数量: {len(generated_ids)}")
     
     # 检查是否复读了输入（复读检测）
     # 如果新生成的部分包含了输入提示词的关键部分，可能是复读
@@ -296,7 +296,7 @@ def generate_response(
     # 如果模型复读了输入，新生成的部分可能包含"用户: xxx\n助手: yyy"这样的格式
     # 如果模型正常生成，新生成的部分应该直接是助手回复内容（不包含助手标记）
     generated_assistant_idx = find_assistant_start_position(generated_ids, tokenizer)
-    print(f"调试: find_assistant_start_position返回: {generated_assistant_idx}")
+    # print(f"调试: find_assistant_start_position返回: {generated_assistant_idx}")
     
     # 如果检测到复读，强制查找助手标记
     if is_repeating and generated_assistant_idx is None:
@@ -312,7 +312,7 @@ def generate_response(
                     prefix_ids = tokenizer.encode(prefix, add_special_tokens=False)
                     if len(prefix_ids) < len(generated_ids):
                         generated_assistant_idx = len(prefix_ids)
-                        print(f"调试: 通过文本匹配找到助手标记位置: {generated_assistant_idx}")
+                        # print(f"调试: 通过文本匹配找到助手标记位置: {generated_assistant_idx}")
                         break
     
     # 检查是否找到了助手标记，并且位置有效
@@ -322,7 +322,7 @@ def generate_response(
         if remaining_tokens > 3:  # 如果助手标记之后还有至少3个token，才认为是有效的助手标记
             # 在新生成的部分中找到了助手标记，说明模型可能复读了输入
             # 只解码助手标记之后的内容（助手回复部分）
-            print(f"调试: 在新生成部分中找到助手标记，位置: {generated_assistant_idx}, 剩余token数: {remaining_tokens}, 将解码位置 {generated_assistant_idx} 到 {len(generated_ids)}")
+            # print(f"调试: 在新生成部分中找到助手标记，位置: {generated_assistant_idx}, 剩余token数: {remaining_tokens}, 将解码位置 {generated_assistant_idx} 到 {len(generated_ids)}")
             response_ids = generated_ids[generated_assistant_idx:]
             response = tokenizer.decode(response_ids, skip_special_tokens=True)
             # 清理可能的残留标记
@@ -331,7 +331,7 @@ def generate_response(
             for marker in ["助手:", "assistant:", "Assistant:"]:
                 if response.startswith(marker):
                     response = response[len(marker):].strip()
-            print(f"调试: 解码后的回复长度: {len(response)}, 内容（前200字符）: {response[:200] if len(response) > 200 else response}")
+            # print(f"调试: 解码后的回复长度: {len(response)}, 内容（前200字符）: {response[:200] if len(response) > 200 else response}")
         else:
             # 助手标记之后内容太少，可能是误判，直接解码所有新生成的内容
             print(f"调试: 助手标记位置 {generated_assistant_idx} 之后内容太少（{remaining_tokens}个token），可能是误判，直接解码所有新生成内容")
@@ -341,11 +341,11 @@ def generate_response(
             for marker in ["助手:", "assistant:", "Assistant:"]:
                 if response.startswith(marker):
                     response = response[len(marker):].strip()
-            print(f"调试: 解码后的回复长度: {len(response)}, 内容（前200字符）: {response[:200] if len(response) > 200 else response}")
+            # print(f"调试: 解码后的回复长度: {len(response)}, 内容（前200字符）: {response[:200] if len(response) > 200 else response}")
     else:
         # 在新生成的部分中没找到助手标记，说明模型正常生成
         # 直接解码所有新生成的内容（这就是助手回复）
-        print(f"调试: 未在新生成部分中找到助手标记，直接解码所有新生成内容")
+        # print(f"调试: 未在新生成部分中找到助手标记，直接解码所有新生成内容")
         response = tokenizer.decode(generated_ids, skip_special_tokens=True)
         # 清理可能的残留标记和特殊token
         response = response.strip()
@@ -357,7 +357,7 @@ def generate_response(
         for marker in ["<|im_start|>assistant", "<|assistant|>"]:
             if response.startswith(marker):
                 response = response[len(marker):].strip()
-        print(f"调试: 解码后的回复长度: {len(response)}, 内容（前200字符）: {response[:200] if len(response) > 200 else response}")
+        # print(f"调试: 解码后的回复长度: {len(response)}, 内容（前200字符）: {response[:200] if len(response) > 200 else response}")
     
     return response.strip()
 
