@@ -272,7 +272,7 @@ class DataCollatorForCausalLM:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="SFT训练 (TRL)")
-    parser.add_argument("--model_name", type=str, default="/data/Qwen3-8B",
+    parser.add_argument("--model_name", type=str, default="/data/Qwen3-8B-Base",
                         help="模型路径或名称")
     parser.add_argument("--dataset", type=str, default=None,
                         help="数据集名称或路径，如果为None则使用默认数据集")
