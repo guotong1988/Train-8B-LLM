@@ -1,2 +1,6 @@
 # Train-8B-LLM
-Data Parallelism, Full Parameter
+
+
+## Dataset
+
+[COIG-CQIA](https://modelscope.cn/datasets/AI-ModelScope/COIG-CQIA)
