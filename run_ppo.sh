@@ -35,7 +35,7 @@ LEARNING_RATE=5e-6
 BATCH_SIZE=2
 GRADIENT_ACCUMULATION_STEPS=1
 NUM_EPOCHS=1
-NUM_GENERATIONS=16  # Samples per prompt for PPO
+NUM_GENERATIONS=4  # Samples per prompt for PPO
 SEED=42
 MAX_STEPS=10  # Override total training steps when dataset has no length
 
