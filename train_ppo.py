@@ -299,7 +299,7 @@ def main() -> None:
         "cliprange_value": args.cliprange_value,
         "logging_steps": 10,
         "save_strategy": "steps",
-        "save_steps": 100,
+        "save_steps": 1000,
         "eval_strategy": "no",
         "remove_unused_columns": False,
         # 关闭 TRL/accelerate 的 FP16 训练，避免 GradScaler 抛出
