@@ -46,7 +46,7 @@ CLIPRANGE=0.2  # PPO clip range
 CLIPRANGE_VALUE=0.2  # PPO value clip range
 
 # 训练配置
-SAVE_STEPS=100
+SAVE_STEPS=1000
 LOGGING_STEPS=10
 
 # 性能优化选项（取消注释以启用）
