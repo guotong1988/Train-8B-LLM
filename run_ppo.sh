@@ -20,7 +20,7 @@ LOG_FILE="${LOGS_DIR}/ppo_train_${TIMESTAMP}.log"
 
 # 训练参数配置（可根据需要修改）
 MODEL_NAME="/data/outputs-sft"
-REWARD_MODEL_NAME="/data/Skywork-Reward-V2-Qwen3-8B"
+REWARD_MODEL_NAME="/data/Skywork-Reward-V2-Qwen3-4B"
 OUTPUT_DIR="./outputs-ppo"
 DATASET=""  # 留空使用默认数据集 AI-ModelScope/COIG-CQIA
 # 子集名称配置（支持多个子集，用空格分隔）
@@ -37,7 +37,8 @@ GRADIENT_ACCUMULATION_STEPS=1
 NUM_EPOCHS=1
 NUM_GENERATIONS=1  # Samples per prompt for PPO
 SEED=42
-MAX_STEPS=10  # Override total training steps when dataset has no length
+MAX_STEPS=-1  # Override total training steps when dataset has no length
+MAX_SEQ_LENGTH=1024  # 最大序列长度，用于对prompt进行截断，参考SFT脚本
 
 # PPO特定参数
 VF_COEF=0.1  # Value function loss coefficient
@@ -56,13 +57,13 @@ LOGGING_STEPS=10
 USE_8BIT_OPTIMIZER="--use_8bit_optimizer"
 
 # 其他选项
-DATALOADER_NUM_WORKERS=4
+DATALOADER_NUM_WORKERS=1
 PUSH_TO_HUB=""  # 如需推送到hub，设置为 "--push_to_hub"
 
-export CUDA_VISIBLE_DEVICES='0,1,2,3'
+export CUDA_VISIBLE_DEVICES='0,1'
 # 分布式训练配置
 # 如果仍然OOM，可以尝试减少GPU数量，例如改为2或1
-NPROC_PER_NODE=4  # 每个节点的进程数（GPU数量）
+NPROC_PER_NODE=2  # 每个节点的进程数（GPU数量）
 
 # 构建命令
 CMD="/opt/conda/envs/python3.10.13/bin/torchrun --standalone --nproc_per_node=${NPROC_PER_NODE} train_ppo.py \
@@ -80,7 +81,8 @@ CMD="/opt/conda/envs/python3.10.13/bin/torchrun --standalone --nproc_per_node=${
     --cliprange ${CLIPRANGE} \
     --cliprange_value ${CLIPRANGE_VALUE} \
     --dataloader_num_workers ${DATALOADER_NUM_WORKERS} \
-    --max_steps ${MAX_STEPS}"
+    --max_steps ${MAX_STEPS} \
+    --max_seq_length ${MAX_SEQ_LENGTH}"
 
 # 添加可选参数
 if [ -n "${DATASET}" ]; then
@@ -138,6 +140,7 @@ fi
     echo "训练轮数: ${NUM_EPOCHS}"
     echo "每个提示词生成数量: ${NUM_GENERATIONS}"
     echo "最大训练步数: ${MAX_STEPS}"
+    echo "最大序列长度: ${MAX_SEQ_LENGTH}"
     echo "价值函数系数: ${VF_COEF}"
     echo "PPO裁剪范围: ${CLIPRANGE}"
     echo "价值裁剪范围: ${CLIPRANGE_VALUE}"
