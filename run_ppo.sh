@@ -21,7 +21,7 @@ LOG_FILE="${LOGS_DIR}/ppo_train_${TIMESTAMP}.log"
 # 训练参数配置（可根据需要修改）
 MODEL_NAME="/data/outputs-sft"
 REWARD_MODEL_NAME="/data/Skywork-Reward-V2-Qwen3-4B"
-OUTPUT_DIR="./outputs-ppo"
+OUTPUT_DIR="/data/outputs-ppo"
 DATASET=""  # 留空使用默认数据集 AI-ModelScope/COIG-CQIA
 # 子集名称配置（支持多个子集，用空格分隔）
 # 留空或不设置则使用所有默认子集（chinese_traditional, coig_pc, exam, finance, douban, human_value, logi_qa, ruozhiba, segmentfault, wiki, wikihow, xhs, zhihu）
