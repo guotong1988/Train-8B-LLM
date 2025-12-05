@@ -3,6 +3,7 @@ import os
 from typing import Optional, Union, List
 
 import torch
+import torch.nn as nn
 from datasets import Dataset, load_dataset, concatenate_datasets
 from modelscope.msdatasets import MsDataset
 from transformers import (
@@ -12,6 +13,36 @@ from transformers import (
     set_seed,
 )
 from trl import PPOConfig, PPOTrainer
+
+
+def unwrap_model(model):
+    """从 DDP 包装中获取原始模型"""
+    if isinstance(model, nn.parallel.DistributedDataParallel):
+        return model.module
+    return model
+
+
+def ensure_model_config_access(model):
+    """确保模型能够正确访问 config 属性，即使被 DDP 包装
+    
+    当模型被 DistributedDataParallel 包装时，直接访问 model.config 会失败。
+    这个函数通过将 config 属性代理到原始模型来解决这个问题。
+    """
+    if isinstance(model, nn.parallel.DistributedDataParallel):
+        # 直接设置 config 属性，指向原始模型的 config
+        # 这样即使被 DDP 包装，也能通过 model.config 访问到配置
+        if not hasattr(model, 'config'):
+            model.config = model.module.config
+        # 同时确保其他常用属性和方法也可以访问
+        if not hasattr(model, 'generate'):
+            # 为 DDP 包装的模型添加 generate 方法的代理
+            def generate_proxy(*args, **kwargs):
+                return model.module.generate(*args, **kwargs)
+            model.generate = generate_proxy
+        # 确保 num_parameters 等方法也可以访问
+        if not hasattr(model, 'num_parameters'):
+            model.num_parameters = lambda: model.module.num_parameters()
+    return model
 
 
 def build_reward_model(
@@ -47,7 +78,7 @@ def extract_prompt_from_conversation(example):
     # 如果已经有prompt字段，直接返回
     if "prompt" in example and example["prompt"]:
         return {"prompt": str(example["prompt"])}
-    
+
     # 尝试从对话格式中提取用户输入
     if "conversations" in example or "messages" in example:
         conversations = example.get("conversations") or example.get("messages", [])
@@ -66,21 +97,21 @@ def extract_prompt_from_conversation(example):
                     content = msg.get("content", msg.get("value", ""))
                     if (role == "user" or role == "human") and content:
                         return {"prompt": str(content)}
-    
+
     # 尝试从其他字段提取
     for key in ["input", "instruction", "question"]:
         if key in example and example[key]:
             return {"prompt": str(example[key])}
-    
+
     # 如果都没有，返回空字符串
     return {"prompt": ""}
 
 
 def load_prompts_dataset(
-    dataset_name_or_path: Optional[str] = None,
-    subset_name: Optional[Union[str, List[str]]] = None,
-    split: str = "train",
-    prompt_column: str = "prompt"
+        dataset_name_or_path: Optional[str] = None,
+        subset_name: Optional[Union[str, List[str]]] = None,
+        split: str = "train",
+        prompt_column: str = "prompt"
 ) -> Dataset:
     """加载prompt数据集，支持本地文件、HuggingFace和ModelScope"""
     if not dataset_name_or_path:
@@ -100,7 +131,7 @@ def load_prompts_dataset(
             'xhs',
             'zhihu'
         ]
-        
+
         if subset_name:
             if isinstance(subset_name, str):
                 subset_list = [subset_name]
@@ -108,10 +139,10 @@ def load_prompts_dataset(
                 subset_list = subset_name
         else:
             subset_list = default_subsets
-        
+
         print(f"使用默认数据集: AI-ModelScope/COIG-CQIA")
         print(f"加载子集: {subset_list}")
-        
+
         datasets = []
         for subset in subset_list:
             try:
@@ -125,23 +156,23 @@ def load_prompts_dataset(
             except Exception as e:
                 print(f"警告: 加载子集 {subset} 失败: {e}")
                 continue
-        
+
         if not datasets:
             raise ValueError("所有子集加载失败，请检查数据集名称和网络连接")
-        
+
         print(f"合并 {len(datasets)} 个子集...")
         ds = concatenate_datasets(datasets)
         print(f"合并后数据集总大小: {len(ds)}")
-        
+
         # 从对话数据中提取prompt
         print("从对话数据中提取prompt...")
         ds = ds.map(extract_prompt_from_conversation, remove_columns=ds.column_names)
         # 过滤空prompt
         ds = ds.filter(lambda x: len(x["prompt"].strip()) > 0)
         print(f"提取prompt后数据集大小: {len(ds)}")
-        
+
         return ds.select_columns(["prompt"])
-    
+
     # 如果是本地路径
     if os.path.exists(dataset_name_or_path):
         ds = load_dataset("json", data_files=dataset_name_or_path, split=split)
@@ -172,11 +203,11 @@ def load_prompts_dataset(
         except Exception as e:
             print(f"从ModelScope加载失败，尝试从HuggingFace加载: {e}")
             ds = load_dataset(dataset_name_or_path, split=split)
-    
+
     # ensure prompt column
     if prompt_column != "prompt" and prompt_column in ds.column_names:
         ds = ds.rename_column(prompt_column, "prompt")
-    
+
     return ds.select_columns(["prompt"]) if "prompt" in ds.column_names else get_default_dataset()
 
 
@@ -190,6 +221,8 @@ def main() -> None:
                         help="数据集子集名称（用于ModelScope），可以指定多个，用空格分隔。如果不指定，则使用所有默认子集")
     parser.add_argument("--prompt_column", type=str, default="prompt",
                         help="prompt列名（用于非ModelScope数据集）")
+    parser.add_argument("--max_seq_length", type=int, default=2048,
+                        help="最大序列长度，用于对prompt进行截断")
     parser.add_argument("--output_dir", type=str, default="./outputs-ppo")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--learning_rate", type=float, default=5e-6)
@@ -235,6 +268,7 @@ def main() -> None:
     reward_model.eval()
     for param in reward_model.parameters():
         param.requires_grad = False
+
     # Data
     train_ds = load_prompts_dataset(
         dataset_name_or_path=args.dataset,
@@ -253,6 +287,7 @@ def main() -> None:
         encodings = tokenizer(
             texts,
             truncation=True,
+            max_length=args.max_seq_length,
             padding=False,
             return_tensors=None,
         )
@@ -287,7 +322,7 @@ def main() -> None:
         # 如需混合精度，推荐在支持的 GPU 上使用 bfloat16（通过 --bf16 开启）。
         "fp16": False,
         "bf16": args.bf16,
-        "mini_batch_size": args.num_generations,
+        # "mini_batch_size": args.num_generations,
         "report_to": ["none"],
         "push_to_hub": args.push_to_hub,
         "max_steps": args.max_steps,
@@ -323,6 +358,10 @@ def main() -> None:
     eval_sample_size = min(len(train_ds), 128)
     eval_ds = train_ds.select(range(eval_sample_size))
 
+    # 确保模型能够正确访问 config 属性（处理 DDP 包装的情况）
+    model = ensure_model_config_access(model)
+    reward_model = ensure_model_config_access(reward_model)
+
     trainer = PPOTrainer(
         model=model,
         ref_model=None,  # Will use the same model
@@ -333,6 +372,16 @@ def main() -> None:
         value_model=reward_model,
         reward_model=reward_model,
     )
+    
+    # PPOTrainer 内部可能会包装模型为 DDP，所以在创建后再次确保 config 可访问
+    if hasattr(trainer, 'model'):
+        trainer.model = ensure_model_config_access(trainer.model)
+    if hasattr(trainer, 'ref_model') and trainer.ref_model is not None:
+        trainer.ref_model = ensure_model_config_access(trainer.ref_model)
+    if hasattr(trainer, 'value_model') and trainer.value_model is not None:
+        trainer.value_model = ensure_model_config_access(trainer.value_model)
+    if hasattr(trainer, 'reward_model') and trainer.reward_model is not None:
+        trainer.reward_model = ensure_model_config_access(trainer.reward_model)
 
     trainer.train()
     trainer.save_model(args.output_dir)
