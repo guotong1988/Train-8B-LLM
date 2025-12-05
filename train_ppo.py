@@ -15,33 +15,18 @@ from transformers import (
 from trl import PPOConfig, PPOTrainer
 
 
-def unwrap_model(model):
-    """从 DDP 包装中获取原始模型"""
-    if isinstance(model, nn.parallel.DistributedDataParallel):
-        return model.module
-    return model
+
 
 
 def ensure_model_config_access(model):
     """确保模型能够正确访问 config 属性，即使被 DDP 包装
     
     当模型被 DistributedDataParallel 包装时，直接访问 model.config 会失败。
-    这个函数通过将 config 属性代理到原始模型来解决这个问题。
+    按照参考方案，直接解包为原始模型（ddp_model.module）。
     """
     if isinstance(model, nn.parallel.DistributedDataParallel):
-        # 直接设置 config 属性，指向原始模型的 config
-        # 这样即使被 DDP 包装，也能通过 model.config 访问到配置
-        if not hasattr(model, 'config'):
-            model.config = model.module.config
-        # 同时确保其他常用属性和方法也可以访问
-        if not hasattr(model, 'generate'):
-            # 为 DDP 包装的模型添加 generate 方法的代理
-            def generate_proxy(*args, **kwargs):
-                return model.module.generate(*args, **kwargs)
-            model.generate = generate_proxy
-        # 确保 num_parameters 等方法也可以访问
-        if not hasattr(model, 'num_parameters'):
-            model.num_parameters = lambda: model.module.num_parameters()
+        # 直接返回原始模型，而不是 DDP 包装
+        return model.module
     return model
 
 
@@ -373,15 +358,19 @@ def main() -> None:
         reward_model=reward_model,
     )
     
-    # PPOTrainer 内部可能会包装模型为 DDP，所以在创建后再次确保 config 可访问
-    if hasattr(trainer, 'model'):
-        trainer.model = ensure_model_config_access(trainer.model)
+    # PPOTrainer 内部可能会通过 accelerator.prepare() 包装模型为 DDP
+    # 按照参考方案，如果模型被包装成 DDP，则解包为原始模型（ddp_model.module）
+    if hasattr(trainer, 'model') and isinstance(trainer.model, nn.parallel.DistributedDataParallel):
+        trainer.model = trainer.model.module
     if hasattr(trainer, 'ref_model') and trainer.ref_model is not None:
-        trainer.ref_model = ensure_model_config_access(trainer.ref_model)
+        if isinstance(trainer.ref_model, nn.parallel.DistributedDataParallel):
+            trainer.ref_model = trainer.ref_model.module
     if hasattr(trainer, 'value_model') and trainer.value_model is not None:
-        trainer.value_model = ensure_model_config_access(trainer.value_model)
+        if isinstance(trainer.value_model, nn.parallel.DistributedDataParallel):
+            trainer.value_model = trainer.value_model.module
     if hasattr(trainer, 'reward_model') and trainer.reward_model is not None:
-        trainer.reward_model = ensure_model_config_access(trainer.reward_model)
+        if isinstance(trainer.reward_model, nn.parallel.DistributedDataParallel):
+            trainer.reward_model = trainer.reward_model.module
 
     trainer.train()
     trainer.save_model(args.output_dir)
