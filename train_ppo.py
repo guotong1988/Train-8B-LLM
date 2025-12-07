@@ -373,8 +373,44 @@ def main() -> None:
             trainer.reward_model = trainer.reward_model.module
 
     trainer.train()
-    trainer.save_model(args.output_dir)
-    tokenizer.save_pretrained(args.output_dir)
+    
+    # 检测分布式训练环境并处理模型保存
+    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        rank = int(os.environ["RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
+        # 导入分布式模块
+        import torch.distributed as dist
+        
+        # 确保所有进程都完成训练并到达保存点
+        if dist.is_initialized():
+            print(f"进程 {rank}/{world_size} 训练完成，等待所有进程同步...")
+            dist.barrier()
+            print(f"进程 {rank}/{world_size} 已到达保存同步点")
+        
+        # 只在主进程保存模型，避免多进程同时写入导致冲突和NCCL超时
+        if rank == 0:
+            print(f"主进程保存模型到: {args.output_dir}")
+            try:
+                trainer.save_model(args.output_dir)
+                tokenizer.save_pretrained(args.output_dir)
+                print("模型保存完成")
+            except Exception as e:
+                print(f"保存模型时出错: {e}")
+                raise
+        else:
+            print(f"进程 {rank} 跳过模型保存（由主进程负责）")
+        
+        # 保存完成后再次同步，确保所有进程都知道保存已完成
+        if dist.is_initialized():
+            dist.barrier()
+            print(f"进程 {rank}/{world_size} 保存流程完成")
+    else:
+        # 单GPU训练模式
+        print(f"保存模型到: {args.output_dir}")
+        trainer.save_model(args.output_dir)
+        tokenizer.save_pretrained(args.output_dir)
+        print("模型保存完成")
+
 
 
 if __name__ == "__main__":
