@@ -19,8 +19,8 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_FILE="${LOGS_DIR}/ppo_train_${TIMESTAMP}.log"
 
 # 训练参数配置（可根据需要修改）
-MODEL_NAME="/data/oss_bucket_0/outputs-sft"
-REWARD_MODEL_NAME="/data/oss_bucket_0/Skywork-Reward-V2-Qwen3-4B"
+MODEL_NAME="/data/outputs-sft"
+REWARD_MODEL_NAME="/data/Skywork-Reward-V2-Qwen3-4B"
 OUTPUT_DIR="./outputs-ppo"
 DATASET=""  # 留空使用默认数据集 AI-ModelScope/COIG-CQIA
 # 子集名称配置（支持多个子集，用空格分隔）
