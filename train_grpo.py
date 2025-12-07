@@ -96,9 +96,24 @@ def build_reward_model_fn(
         # 分批处理，确保 input_ids 是正确的整数类型
         for i in range(0, len(completions), batch_size):
             batch_completions = completions[i:i + batch_size]
+            
+            # 过滤掉空字符串，记录非空 completion 在批次中的位置
+            valid_completions = []
+            valid_positions = []  # 在批次中的位置索引
+            for pos, comp in enumerate(batch_completions):
+                if comp and comp.strip():  # 非空且非纯空白
+                    valid_completions.append(comp)
+                    valid_positions.append(pos)
+            
+            # 如果批次中所有 completion 都为空，给它们分配默认低分
+            if not valid_completions:
+                batch_scores = [-1.0] * len(batch_completions)  # 空 completion 给低分
+                scores.extend(batch_scores)
+                continue
+            
             # 使用 tokenizer 编码，确保返回的是整数类型的 input_ids
             encoded = rm_tokenizer(
-                batch_completions,
+                valid_completions,
                 padding=True,
                 truncation=True,
                 return_tensors="pt",
@@ -107,35 +122,47 @@ def build_reward_model_fn(
             # 确保 input_ids 是 Long 类型（整数）
             # 使用 to(torch.long) 而不是 long()，并先检查类型
             input_ids = encoded["input_ids"]
-            if input_ids.dtype != torch.long:
-                input_ids = input_ids.to(torch.long)
-            input_ids = input_ids.to(device)
             
-            attention_mask = encoded.get("attention_mask", None)
-            if attention_mask is not None:
-                # 确保 attention_mask 也是正确的类型
-                if attention_mask.dtype != torch.long:
-                    attention_mask = attention_mask.to(torch.long)
-                attention_mask = attention_mask.to(device)
-            
-            # 前向传播
-            with torch.no_grad():
+            # 检查 input_ids 是否为空（防止 tokenizer 产生空序列）
+            # 检查：1) 总元素数为0 2) batch_size为0 3) 序列长度为0
+            if input_ids.numel() == 0 or len(input_ids.shape) < 2 or input_ids.shape[0] == 0 or input_ids.shape[1] == 0:
+                # 如果编码后为空，给这些 completion 分配默认低分
+                valid_scores = [-1.0] * len(valid_completions)
+            else:
+                if input_ids.dtype != torch.long:
+                    input_ids = input_ids.to(torch.long)
+                input_ids = input_ids.to(device)
+                
+                attention_mask = encoded.get("attention_mask", None)
                 if attention_mask is not None:
-                    outputs = rm_model(input_ids=input_ids, attention_mask=attention_mask)
-                else:
-                    outputs = rm_model(input_ids=input_ids)
+                    # 确保 attention_mask 也是正确的类型
+                    if attention_mask.dtype != torch.long:
+                        attention_mask = attention_mask.to(torch.long)
+                    attention_mask = attention_mask.to(device)
                 
-                # 获取 logits
-                logits = outputs.logits
-                
-                # 处理 logits：如果是二分类，使用正类；否则使用最后一个类
-                if logits.shape[-1] == 1:
-                    batch_scores = logits[:, 0].cpu().tolist()
-                else:
-                    # prefer last class as "more positive"
-                    batch_scores = logits[:, -1].cpu().tolist()
-                
-                scores.extend(batch_scores)
+                # 前向传播
+                with torch.no_grad():
+                    if attention_mask is not None:
+                        outputs = rm_model(input_ids=input_ids, attention_mask=attention_mask)
+                    else:
+                        outputs = rm_model(input_ids=input_ids)
+                    
+                    # 获取 logits
+                    logits = outputs.logits
+                    
+                    # 处理 logits：如果是二分类，使用正类；否则使用最后一个类
+                    if logits.shape[-1] == 1:
+                        valid_scores = logits[:, 0].cpu().tolist()
+                    else:
+                        # prefer last class as "more positive"
+                        valid_scores = logits[:, -1].cpu().tolist()
+            
+            # 将有效 completion 的分数映射回原始批次位置
+            batch_scores = [-1.0] * len(batch_completions)  # 默认低分
+            for pos, score in zip(valid_positions, valid_scores):
+                batch_scores[pos] = score
+            
+            scores.extend(batch_scores)
         
         if not normalize:
             return scores
