@@ -11,11 +11,45 @@ from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
     set_seed,
+    TrainerCallback,
 )
 from trl import PPOConfig, PPOTrainer
 
 
 
+
+
+class DistributedSaveCallback(TrainerCallback):
+    """自定义回调，确保在分布式训练中保存模型时正确同步，避免NCCL超时"""
+    
+    def _check_distributed(self):
+        """检查分布式环境是否已初始化"""
+        import torch.distributed as dist
+        if dist.is_available() and dist.is_initialized():
+            return True, dist, int(os.environ.get("RANK", 0)), int(os.environ.get("WORLD_SIZE", 1))
+        return False, None, 0, 1
+    
+    def on_save(self, args, state, control, **kwargs):
+        """在保存检查点前同步所有进程"""
+        is_dist, dist, rank, world_size = self._check_distributed()
+        if is_dist:
+            # 确保所有进程都到达保存点，避免部分进程提前尝试保存导致NCCL超时
+            dist.barrier()
+            if rank == 0:
+                print(f"主进程 (rank {rank}/{world_size}) 正在保存检查点...")
+            else:
+                print(f"进程 {rank}/{world_size} 已到达保存同步点，等待主进程保存...")
+    
+    def on_save_end(self, args, state, control, **kwargs):
+        """保存完成后同步所有进程"""
+        is_dist, dist, rank, world_size = self._check_distributed()
+        if is_dist:
+            # 确保所有进程都知道保存已完成，避免后续操作不同步
+            dist.barrier()
+            if rank == 0:
+                print(f"检查点保存完成 (rank {rank}/{world_size})")
+            else:
+                print(f"进程 {rank}/{world_size} 已收到保存完成信号")
 
 
 def ensure_model_config_access(model):
@@ -304,6 +338,7 @@ def main() -> None:
         "logging_steps": args.logging_steps,
         "save_strategy": "steps",
         "save_steps": args.save_steps,
+        "save_on_each_node": False,  # 只在主节点保存，避免多进程同时保存导致NCCL超时
         "eval_strategy": "no",
         "remove_unused_columns": False,
         # 关闭 TRL/accelerate 的 FP16 训练，避免 GradScaler 抛出
@@ -351,6 +386,9 @@ def main() -> None:
     model = ensure_model_config_access(model)
     reward_model = ensure_model_config_access(reward_model)
 
+    # 创建自定义回调以处理分布式训练中的保存同步
+    save_callback = DistributedSaveCallback()
+    
     trainer = PPOTrainer(
         model=model,
         ref_model=None,  # Will use the same model
@@ -360,6 +398,7 @@ def main() -> None:
         eval_dataset=eval_ds,
         value_model=reward_model,
         reward_model=reward_model,
+        callbacks=[save_callback],  # 添加自定义回调
     )
     
     # PPOTrainer 内部可能会通过 accelerator.prepare() 包装模型为 DDP
