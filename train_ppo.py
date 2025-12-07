@@ -224,6 +224,10 @@ def main() -> None:
     parser.add_argument("--push_to_hub", action="store_true")
     parser.add_argument("--max_steps", type=int, default=10,
                         help="Override total training steps when dataset has no length")
+    parser.add_argument("--save_steps", type=int, default=1000,
+                        help="每多少步保存一次模型")
+    parser.add_argument("--logging_steps", type=int, default=10,
+                        help="每多少步记录一次日志")
     parser.add_argument(
         "--use_8bit_optimizer",
         action="store_true",
@@ -297,9 +301,9 @@ def main() -> None:
         "vf_coef": args.vf_coef,
         "cliprange": args.cliprange,
         "cliprange_value": args.cliprange_value,
-        "logging_steps": 10,
+        "logging_steps": args.logging_steps,
         "save_strategy": "steps",
-        "save_steps": 1000,
+        "save_steps": args.save_steps,
         "eval_strategy": "no",
         "remove_unused_columns": False,
         # 关闭 TRL/accelerate 的 FP16 训练，避免 GradScaler 抛出
