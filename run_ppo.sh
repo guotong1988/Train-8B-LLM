@@ -19,9 +19,9 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_FILE="${LOGS_DIR}/ppo_train_${TIMESTAMP}.log"
 
 # 训练参数配置（可根据需要修改）
-MODEL_NAME="/data/outputs-sft"
-REWARD_MODEL_NAME="/data/Skywork-Reward-V2-Qwen3-4B"
-OUTPUT_DIR="/data/outputs-ppo"
+MODEL_NAME="/data/oss_bucket_0/outputs-sft"
+REWARD_MODEL_NAME="/data/oss_bucket_0/Skywork-Reward-V2-Qwen3-4B"
+OUTPUT_DIR="./outputs-ppo"
 DATASET=""  # 留空使用默认数据集 AI-ModelScope/COIG-CQIA
 # 子集名称配置（支持多个子集，用空格分隔）
 # 留空或不设置则使用所有默认子集（chinese_traditional, coig_pc, exam, finance, douban, human_value, logi_qa, ruozhiba, segmentfault, wiki, wikihow, xhs, zhihu）
@@ -146,8 +146,8 @@ fi
     echo "价值函数系数: ${VF_COEF}"
     echo "PPO裁剪范围: ${CLIPRANGE}"
     echo "价值裁剪范围: ${CLIPRANGE_VALUE}"
-    echo "保存步数: ${SAVE_STEPS}"
-    echo "日志记录步数: ${LOGGING_STEPS}"
+    echo "保存步数间隔: ${SAVE_STEPS}"
+    echo "日志记录步数间隔: ${LOGGING_STEPS}"
     echo "随机种子: ${SEED}"
     if [ -n "${USE_8BIT_OPTIMIZER}" ]; then
         echo "8-bit优化器: 已启用（可节省约50-75%优化器状态显存）"
@@ -196,3 +196,4 @@ else
     echo "错误: 训练进程启动失败，请查看日志文件: ${LOG_FILE}"
     exit 1
 fi
+
