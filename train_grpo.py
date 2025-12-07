@@ -75,35 +75,68 @@ def build_reward_model_fn(
     if getattr(rm_model.config, "pad_token_id", None) is None and rm_tokenizer.pad_token_id is not None:
         rm_model.config.pad_token_id = rm_tokenizer.pad_token_id
 
-    # use a pipeline for batching and device placement
-    pipe_device = 0 if (device == "cuda" or (device is None and torch.cuda.is_available())) else -1
-    rm_pipe = pipeline(
-        task="text-classification",
-        model=rm_model,
-        tokenizer=rm_tokenizer,
-        #  device=pipe_device,
-        truncation=True,
-        top_k=None,
-        function_to_apply="none",  # use raw logits so we can map scores directly
-        return_all_scores=True,
-    )
+    # 不使用 pipeline，直接使用模型和 tokenizer 以避免类型转换问题
+    rm_model.eval()
+    # 如果使用 device_map="auto"，模型可能分布在多个设备上，需要从模型参数获取设备
+    if hasattr(rm_model, "hf_device_map") and rm_model.hf_device_map:
+        # 模型使用了 device_map，从第一个参数获取设备
+        first_param = next(rm_model.parameters())
+        device = str(first_param.device)
+    else:
+        # 否则使用指定的 device 或默认设备
+        device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
+        if hasattr(rm_model, "to"):
+            rm_model = rm_model.to(device)
 
     def reward_fn(completions: List[str], prompts: List[str], **kwargs) -> List[float]:
         del prompts  # unused here
-        # 将列表转换为 Dataset 以最大化 GPU 效率，利用 Dataset 的批处理能力
         batch_size = kwargs.get("batch_size", 2)
-        completion_dataset = Dataset.from_dict({"text": completions})
-        # 使用 pipeline 处理 Dataset，传递 Dataset 对象以启用更高效的批处理
-        # pipeline 会自动处理 Dataset 并利用批处理优化
-        outputs = list(rm_pipe(completion_dataset["text"], batch_size=batch_size))
         scores: List[float] = []
-        for out in outputs:
-            # If binary classifier, use logit of positive class; otherwise sum weighted by label index
-            if len(out) == 1:
-                scores.append(float(out[0]["score"]))
-            else:
-                # prefer last class as "more positive"
-                scores.append(float(out[-1]["score"]))
+        
+        # 分批处理，确保 input_ids 是正确的整数类型
+        for i in range(0, len(completions), batch_size):
+            batch_completions = completions[i:i + batch_size]
+            # 使用 tokenizer 编码，确保返回的是整数类型的 input_ids
+            encoded = rm_tokenizer(
+                batch_completions,
+                padding=True,
+                truncation=True,
+                return_tensors="pt",
+                max_length=512,  # 设置合理的最大长度
+            )
+            # 确保 input_ids 是 Long 类型（整数）
+            # 使用 to(torch.long) 而不是 long()，并先检查类型
+            input_ids = encoded["input_ids"]
+            if input_ids.dtype != torch.long:
+                input_ids = input_ids.to(torch.long)
+            input_ids = input_ids.to(device)
+            
+            attention_mask = encoded.get("attention_mask", None)
+            if attention_mask is not None:
+                # 确保 attention_mask 也是正确的类型
+                if attention_mask.dtype != torch.long:
+                    attention_mask = attention_mask.to(torch.long)
+                attention_mask = attention_mask.to(device)
+            
+            # 前向传播
+            with torch.no_grad():
+                if attention_mask is not None:
+                    outputs = rm_model(input_ids=input_ids, attention_mask=attention_mask)
+                else:
+                    outputs = rm_model(input_ids=input_ids)
+                
+                # 获取 logits
+                logits = outputs.logits
+                
+                # 处理 logits：如果是二分类，使用正类；否则使用最后一个类
+                if logits.shape[-1] == 1:
+                    batch_scores = logits[:, 0].cpu().tolist()
+                else:
+                    # prefer last class as "more positive"
+                    batch_scores = logits[:, -1].cpu().tolist()
+                
+                scores.extend(batch_scores)
+        
         if not normalize:
             return scores
         # z-norm for stability (per-batch)
