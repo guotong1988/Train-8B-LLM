@@ -49,40 +49,6 @@ class DistributedSaveCallback(TrainerCallback):
                 print(f"进程 {rank}/{world_size} 已收到保存完成信号")
 
 
-class CombinedReward:
-    """Combine multiple reward sources with weights.
-
-    Each reward function follows signature:
-        reward_fn(completions: List[str], prompts: List[str], **kwargs) -> List[float]
-    """
-
-    def __init__(
-            self,
-            reward_fns: List[Callable[[List[str], List[str]], List[float]]],
-            weights: Optional[List[float]] = None,
-    ) -> None:
-        if not reward_fns:
-            raise ValueError("reward_fns must not be empty")
-        self.reward_fns = reward_fns
-        self.weights = weights or [1.0] * len(reward_fns)
-        if len(self.weights) != len(self.reward_fns):
-            raise ValueError("weights length must match reward_fns length")
-
-    def __call__(self, completions: List[str], prompts: List[str], **kwargs) -> List[float]:
-        if not completions:
-            return []
-        all_scores: List[List[float]] = []
-        for reward_fn in self.reward_fns:
-            scores = reward_fn(completions, prompts, **kwargs)
-            if len(scores) != len(completions):
-                raise ValueError("All reward functions must return scores for each completion")
-            all_scores.append(scores)
-        # weighted sum
-        totals: List[float] = [0.0] * len(completions)
-        for w, scores in zip(self.weights, all_scores):
-            for i, s in enumerate(scores):
-                totals[i] += w * float(s)
-        return totals
 
 
 def build_reward_model_fn(
@@ -124,7 +90,12 @@ def build_reward_model_fn(
 
     def reward_fn(completions: List[str], prompts: List[str], **kwargs) -> List[float]:
         del prompts  # unused here
-        outputs = rm_pipe(completions, batch_size=kwargs.get("batch_size", 2))
+        # 将列表转换为 Dataset 以最大化 GPU 效率，利用 Dataset 的批处理能力
+        batch_size = kwargs.get("batch_size", 2)
+        completion_dataset = Dataset.from_dict({"text": completions})
+        # 使用 pipeline 处理 Dataset，传递 Dataset 对象以启用更高效的批处理
+        # pipeline 会自动处理 Dataset 并利用批处理优化
+        outputs = list(rm_pipe(completion_dataset["text"], batch_size=batch_size))
         scores: List[float] = []
         for out in outputs:
             # If binary classifier, use logit of positive class; otherwise sum weighted by label index
@@ -145,41 +116,6 @@ def build_reward_model_fn(
     return reward_fn
 
 
-def build_keyword_reward_fn(keywords: List[str], case_sensitive: bool = False, bonus: float = 1.0) -> Callable[
-    [List[str], List[str]], List[float]]:
-    ks = keywords if case_sensitive else [k.lower() for k in keywords]
-
-    def reward_fn(completions: List[str], prompts: List[str], **kwargs) -> List[float]:
-        del prompts
-        scores: List[float] = []
-        for text in completions:
-            t = text if case_sensitive else text.lower()
-            count = sum(1 for k in ks if k in t)
-            scores.append(bonus * float(count))
-        return scores
-
-    return reward_fn
-
-
-def build_length_reward_fn(target_min: int, target_max: int, scale: float = 1.0) -> Callable[
-    [List[str], List[str]], List[float]]:
-    def reward_fn(completions: List[str], prompts: List[str], **kwargs) -> List[float]:
-        del prompts
-        scores: List[float] = []
-        for text in completions:
-            n = len(text.split())
-            if n < target_min:
-                # linearly penalize up to target_min
-                gap = float(target_min - n)
-                scores.append(-gap * scale)
-            elif n > target_max:
-                gap = float(n - target_max)
-                scores.append(-gap * scale)
-            else:
-                scores.append(scale)  # inside band gets a small positive
-        return scores
-
-    return reward_fn
 
 
 def get_default_dataset(num_examples: int = 50) -> Dataset:
@@ -332,8 +268,8 @@ def load_prompts_dataset(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="GRPO training with combined rewards (TRL)")
-    parser.add_argument("--model_name", type=str, default="")
-    parser.add_argument("--reward_model_name", type=str, default="")
+    parser.add_argument("--model_name", type=str, default="/data/oss_bucket_0/Qwen3-32B")
+    parser.add_argument("--reward_model_name", type=str, default="/data/oss_bucket_0/Qwen3-32B")
     parser.add_argument(
         "--dataset",
         type=str,
