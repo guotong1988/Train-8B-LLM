@@ -82,7 +82,9 @@ CMD="/opt/conda/envs/python3.10.13/bin/torchrun --standalone --nproc_per_node=${
     --cliprange_value ${CLIPRANGE_VALUE} \
     --dataloader_num_workers ${DATALOADER_NUM_WORKERS} \
     --max_steps ${MAX_STEPS} \
-    --max_seq_length ${MAX_SEQ_LENGTH}"
+    --max_seq_length ${MAX_SEQ_LENGTH} \
+    --save_steps ${SAVE_STEPS} \
+    --logging_steps ${LOGGING_STEPS}"
 
 # 添加可选参数
 if [ -n "${DATASET}" ]; then
@@ -144,6 +146,8 @@ fi
     echo "价值函数系数: ${VF_COEF}"
     echo "PPO裁剪范围: ${CLIPRANGE}"
     echo "价值裁剪范围: ${CLIPRANGE_VALUE}"
+    echo "保存步数: ${SAVE_STEPS}"
+    echo "日志记录步数: ${LOGGING_STEPS}"
     echo "随机种子: ${SEED}"
     if [ -n "${USE_8BIT_OPTIMIZER}" ]; then
         echo "8-bit优化器: 已启用（可节省约50-75%优化器状态显存）"
@@ -192,4 +196,3 @@ else
     echo "错误: 训练进程启动失败，请查看日志文件: ${LOG_FILE}"
     exit 1
 fi
-
