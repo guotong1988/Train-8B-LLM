@@ -396,7 +396,7 @@ def main():
                         help="提示词（如果不提供，将进入交互模式）")
     parser.add_argument("--device", type=str, default=None,
                         help="设备（cuda/cpu），默认自动检测")
-    parser.add_argument("--max_new_tokens", type=int, default=512,
+    parser.add_argument("--max_new_tokens", type=int, default=4096,
                         help="最大生成token数")
     parser.add_argument("--temperature", type=float, default=0.7,
                         help="温度参数（控制随机性，越高越随机）")
@@ -412,7 +412,7 @@ def main():
                         help="使用模型的chat template格式化提示词（仅当你的训练数据本身也是chat模板时才建议开启）")
     parser.add_argument("--no_chat_template", action="store_true",
                         help="禁用chat template，使用简单格式")
-    parser.add_argument("--max_seq_length", type=int, default=None,
+    parser.add_argument("--max_seq_length", type=int, default=4096,
                         help="最大序列长度（可选，用于设置tokenizer.model_max_length，默认使用tokenizer的默认值）")
     parser.add_argument("--seed", type=int, default=None,
                         help="随机种子")
