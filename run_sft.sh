@@ -20,7 +20,7 @@ LOG_FILE="${LOGS_DIR}/sft_train_${TIMESTAMP}.log"
 
 # 训练参数配置（可根据需要修改）
 MODEL_NAME="/data/Qwen3-8B-Base"
-OUTPUT_DIR="/data/outputs-sft-from-base"
+OUTPUT_DIR="/data/outputs-sft-from-base/${TIMESTAMP}"
 DATASET=""  # 留空使用默认数据集
 # JSONL文件路径配置（优先于DATASET，如果设置了LLM_JSONL，将使用该文件）
 # 示例: LLM_JSONL="llm.jsonl"  # 使用当前目录下的llm.jsonl文件
