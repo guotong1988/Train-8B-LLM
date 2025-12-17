@@ -92,11 +92,35 @@ def get_default_dataset(num_examples: int = 50) -> Dataset:
     return Dataset.from_dict({"prompt": prompts})
 
 
-def extract_prompt_from_conversation(example):
-    """从对话数据中提取prompt（用户输入）"""
-    # 如果已经有prompt字段，直接返回
+def extract_prompt_from_conversation(example, tokenizer=None):
+    """从对话数据中提取prompt（用户输入），使用Qwen3 chat template格式化
+    
+    Args:
+        example: 数据集样本
+        tokenizer: 分词器，用于应用chat template（Qwen3系列）
+    """
+    # 检查是否可以使用chat template
+    use_chat_template = tokenizer is not None and hasattr(tokenizer, "apply_chat_template")
+    
+    # 如果已经有prompt字段，使用chat template格式化
     if "prompt" in example and example["prompt"]:
-        return {"prompt": str(example["prompt"])}
+        prompt_text = str(example["prompt"])
+        # 如果已经包含chat template标记，直接返回
+        if "<|im_start|>" in prompt_text or "<|im_end|>" in prompt_text:
+            return {"prompt": prompt_text}
+        # 否则使用chat template格式化（只包含用户消息）
+        if use_chat_template:
+            try:
+                messages = [{"role": "user", "content": prompt_text}]
+                formatted_prompt = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=False
+                )
+                return {"prompt": formatted_prompt}
+            except Exception as e:
+                print(f"警告: 使用chat template格式化prompt失败: {e}，使用原始prompt")
+        return {"prompt": prompt_text}
 
     # 尝试从对话格式中提取用户输入
     if "conversations" in example or "messages" in example:
@@ -115,12 +139,38 @@ def extract_prompt_from_conversation(example):
                     role = msg.get("role", msg.get("from", ""))
                     content = msg.get("content", msg.get("value", ""))
                     if (role == "user" or role == "human") and content:
-                        return {"prompt": str(content)}
+                        prompt_text = str(content)
+                        # 使用chat template格式化（只包含用户消息）
+                        if use_chat_template:
+                            try:
+                                messages = [{"role": "user", "content": prompt_text}]
+                                formatted_prompt = tokenizer.apply_chat_template(
+                                    messages,
+                                    tokenize=False,
+                                    add_generation_prompt=False
+                                )
+                                return {"prompt": formatted_prompt}
+                            except Exception as e:
+                                print(f"警告: 使用chat template格式化prompt失败: {e}，使用原始prompt")
+                        return {"prompt": prompt_text}
 
     # 尝试从其他字段提取
     for key in ["input", "instruction", "question"]:
         if key in example and example[key]:
-            return {"prompt": str(example[key])}
+            prompt_text = str(example[key])
+            # 使用chat template格式化（只包含用户消息）
+            if use_chat_template:
+                try:
+                    messages = [{"role": "user", "content": prompt_text}]
+                    formatted_prompt = tokenizer.apply_chat_template(
+                        messages,
+                        tokenize=False,
+                        add_generation_prompt=False
+                    )
+                    return {"prompt": formatted_prompt}
+                except Exception as e:
+                    print(f"警告: 使用chat template格式化prompt失败: {e}，使用原始prompt")
+            return {"prompt": prompt_text}
 
     # 如果都没有，返回空字符串
     return {"prompt": ""}
@@ -130,7 +180,8 @@ def load_prompts_dataset(
         dataset_name_or_path: Optional[str] = None,
         subset_name: Optional[Union[str, List[str]]] = None,
         split: str = "train",
-        prompt_column: str = "prompt"
+        prompt_column: str = "prompt",
+        tokenizer=None,
 ) -> Dataset:
     """加载prompt数据集，支持本地文件、HuggingFace和ModelScope"""
     if not dataset_name_or_path:
@@ -183,9 +234,11 @@ def load_prompts_dataset(
         ds = concatenate_datasets(datasets)
         print(f"合并后数据集总大小: {len(ds)}")
 
-        # 从对话数据中提取prompt
-        print("从对话数据中提取prompt...")
-        ds = ds.map(extract_prompt_from_conversation, remove_columns=ds.column_names)
+        # 从对话数据中提取prompt（使用Qwen3 chat template）
+        print("从对话数据中提取prompt（使用Qwen3 chat template）...")
+        if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
+            print("使用Qwen3 chat template格式化prompt")
+        ds = ds.map(lambda x: extract_prompt_from_conversation(x, tokenizer=tokenizer), remove_columns=ds.column_names)
         # 过滤空prompt
         ds = ds.filter(lambda x: len(x["prompt"].strip()) > 0)
         print(f"提取prompt后数据集大小: {len(ds)}")
@@ -216,8 +269,8 @@ def load_prompts_dataset(
             # 转换为HuggingFace Dataset格式（如果还不是）
             if hasattr(ds, 'to_hf_dataset'):
                 ds = ds.to_hf_dataset()
-            # 从对话数据中提取prompt
-            ds = ds.map(extract_prompt_from_conversation, remove_columns=ds.column_names)
+            # 从对话数据中提取prompt（使用Qwen3 chat template）
+            ds = ds.map(lambda x: extract_prompt_from_conversation(x, tokenizer=tokenizer), remove_columns=ds.column_names)
             ds = ds.filter(lambda x: len(x["prompt"].strip()) > 0)
         except Exception as e:
             print(f"从ModelScope加载失败，尝试从HuggingFace加载: {e}")
@@ -297,7 +350,8 @@ def main() -> None:
         dataset_name_or_path=args.dataset,
         subset_name=args.subset_name,
         split="train",
-        prompt_column=args.prompt_column
+        prompt_column=args.prompt_column,
+        tokenizer=tokenizer,  # 传递tokenizer以使用chat template
     )
     print(f"原始训练集大小: {len(train_ds)}")
 
