@@ -13,7 +13,98 @@ from transformers import (
     set_seed,
     TrainerCallback,
 )
-from trl import GRPOConfig, GRPOTrainer
+
+# 延迟导入 trl 以避免配置冲突
+# 如果 aimv2 配置已被注册（例如由 vLLM），在导入前处理冲突
+def _import_trl():
+    """安全导入 trl，处理配置冲突"""
+    # 在导入 trl 之前，先处理可能的配置冲突
+    from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+    
+    # 临时修改 register 方法以允许已存在的配置
+    original_register = CONFIG_MAPPING.register
+    
+    def patched_register(key, value, exist_ok=False):
+        """修补的注册函数，对 aimv2 使用 exist_ok=True"""
+        if key == "aimv2":
+            # 对于 aimv2，检查是否已存在
+            # CONFIG_MAPPING 可能有不同的内部结构，尝试多种方式检查
+            config_exists = False
+            try:
+                # 方法1: 检查 _extra_content
+                if hasattr(CONFIG_MAPPING, '_extra_content'):
+                    config_exists = key in CONFIG_MAPPING._extra_content
+                # 方法2: 尝试直接访问（如果已存在会返回配置类）
+                if not config_exists:
+                    try:
+                        _ = CONFIG_MAPPING[key]
+                        config_exists = True
+                    except (KeyError, AttributeError):
+                        pass
+            except Exception:
+                pass
+            
+            # 如果配置已存在，跳过注册
+            if config_exists:
+                return
+            
+            # 尝试使用 exist_ok=True 注册
+            try:
+                return original_register(key, value, exist_ok=True)
+            except (TypeError, ValueError) as e:
+                # 如果 exist_ok 参数不支持或仍然失败，检查是否是"已存在"错误
+                if "already used" in str(e) or "already exists" in str(e).lower():
+                    # 配置已存在，这是预期的，直接返回
+                    return
+                # 其他错误，重新抛出
+                raise
+        else:
+            return original_register(key, value, exist_ok=exist_ok)
+    
+    # 应用补丁
+    CONFIG_MAPPING.register = patched_register
+    
+    try:
+        from trl import GRPOConfig, GRPOTrainer
+        return GRPOConfig, GRPOTrainer
+    except ValueError as e:
+        if "'aimv2'" in str(e) or "already used by a Transformers config" in str(e):
+            import warnings
+            import sys
+            
+            warnings.warn(
+                f"检测到配置冲突 (aimv2): {e}。"
+                "这通常由 vLLM 或其他库已注册该配置导致。"
+                "尝试清除模块缓存并重新导入..."
+            )
+            
+            # 清除 trl 相关模块缓存
+            modules_to_clear = [k for k in list(sys.modules.keys()) if k.startswith('trl')]
+            for mod in modules_to_clear:
+                del sys.modules[mod]
+            
+            # 再次尝试导入
+            try:
+                from trl import GRPOConfig, GRPOTrainer
+                return GRPOConfig, GRPOTrainer
+            except ValueError:
+                # 如果仍然失败，恢复原始函数并抛出错误
+                CONFIG_MAPPING.register = original_register
+                raise RuntimeError(
+                    f"无法解决配置冲突: {e}。"
+                    "请检查是否安装了冲突的库（如 vLLM），"
+                    "或尝试更新 transformers 和 trl 库的版本。"
+                ) from e
+        else:
+            # 恢复原始函数
+            CONFIG_MAPPING.register = original_register
+            raise
+    finally:
+        # 确保恢复原始函数（即使成功导入）
+        CONFIG_MAPPING.register = original_register
+
+# 导入 trl 组件
+GRPOConfig, GRPOTrainer = _import_trl()
 
 
 class DistributedSaveCallback(TrainerCallback):
@@ -61,7 +152,7 @@ def build_reward_model_fn(
 
     Returns a function that outputs a scalar reward per completion.
     """
-    rm_tokenizer = AutoTokenizer.from_pretrained(reward_model_name, use_fast=True)
+    rm_tokenizer = AutoTokenizer.from_pretrained(reward_model_name, use_fast=True, trust_remote_code=True)
 
     # ensure padding token exists for batched inference
     if rm_tokenizer.pad_token is None:
@@ -71,7 +162,7 @@ def build_reward_model_fn(
         else:
             rm_tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     rm_model = AutoModelForSequenceClassification.from_pretrained(reward_model_name, torch_dtype=torch_dtype,
-                                                                  device_map="auto")
+                                                                  device_map="auto", trust_remote_code=True)
     if getattr(rm_model.config, "pad_token_id", None) is None and rm_tokenizer.pad_token_id is not None:
         rm_model.config.pad_token_id = rm_tokenizer.pad_token_id
 
@@ -190,11 +281,35 @@ def get_default_dataset(num_examples: int = 50) -> Dataset:
     return Dataset.from_dict({"prompt": prompts})
 
 
-def extract_prompt_from_conversation(example):
-    """从对话数据中提取prompt（用户输入），与 PPO 版本保持一致"""
-    # 如果已经有prompt字段，直接返回
+def extract_prompt_from_conversation(example, tokenizer=None):
+    """从对话数据中提取prompt（用户输入），使用Qwen3 chat template格式化
+    
+    Args:
+        example: 数据集样本
+        tokenizer: 分词器，用于应用chat template（Qwen3系列）
+    """
+    # 检查是否可以使用chat template
+    use_chat_template = tokenizer is not None and hasattr(tokenizer, "apply_chat_template")
+    
+    # 如果已经有prompt字段，使用chat template格式化
     if "prompt" in example and example["prompt"]:
-        return {"prompt": str(example["prompt"])}
+        prompt_text = str(example["prompt"])
+        # 如果已经包含chat template标记，直接返回
+        if "<|im_start|>" in prompt_text or "<|im_end|>" in prompt_text:
+            return {"prompt": prompt_text}
+        # 否则使用chat template格式化（只包含用户消息）
+        if use_chat_template:
+            try:
+                messages = [{"role": "user", "content": prompt_text}]
+                formatted_prompt = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=False
+                )
+                return {"prompt": formatted_prompt}
+            except Exception as e:
+                print(f"警告: 使用chat template格式化prompt失败: {e}，使用原始prompt")
+        return {"prompt": prompt_text}
 
     # 尝试从对话格式中提取用户输入
     if "conversations" in example or "messages" in example:
@@ -209,16 +324,42 @@ def extract_prompt_from_conversation(example):
         if isinstance(conversations, list) and len(conversations) > 0:
             # 取第一条用户消息作为prompt
             for msg in conversations:
-                if isinstance(msg, Dict):
+                if isinstance(msg, dict):
                     role = msg.get("role", msg.get("from", ""))
                     content = msg.get("content", msg.get("value", ""))
                     if (role == "user" or role == "human") and content:
-                        return {"prompt": str(content)}
+                        prompt_text = str(content)
+                        # 使用chat template格式化（只包含用户消息）
+                        if use_chat_template:
+                            try:
+                                messages = [{"role": "user", "content": prompt_text}]
+                                formatted_prompt = tokenizer.apply_chat_template(
+                                    messages,
+                                    tokenize=False,
+                                    add_generation_prompt=False
+                                )
+                                return {"prompt": formatted_prompt}
+                            except Exception as e:
+                                print(f"警告: 使用chat template格式化prompt失败: {e}，使用原始prompt")
+                        return {"prompt": prompt_text}
 
     # 尝试从其他字段提取
     for key in ["input", "instruction", "question"]:
         if key in example and example[key]:
-            return {"prompt": str(example[key])}
+            prompt_text = str(example[key])
+            # 使用chat template格式化（只包含用户消息）
+            if use_chat_template:
+                try:
+                    messages = [{"role": "user", "content": prompt_text}]
+                    formatted_prompt = tokenizer.apply_chat_template(
+                        messages,
+                        tokenize=False,
+                        add_generation_prompt=False
+                    )
+                    return {"prompt": formatted_prompt}
+                except Exception as e:
+                    print(f"警告: 使用chat template格式化prompt失败: {e}，使用原始prompt")
+            return {"prompt": prompt_text}
 
     # 如果都没有，返回空字符串
     return {"prompt": ""}
@@ -229,6 +370,7 @@ def load_prompts_dataset(
     subset_name: Optional[List[str]] = None,
     split: str = "train",
     prompt_column: str = "prompt",
+    tokenizer=None,
 ) -> Dataset:
     """加载prompt数据集，支持本地文件、HuggingFace和ModelScope。
 
@@ -282,9 +424,11 @@ def load_prompts_dataset(
         ds = concatenate_datasets(datasets)
         print(f"合并后数据集总大小: {len(ds)}")
 
-        # 从对话数据中提取prompt
-        print("从对话数据中提取prompt...")
-        ds = ds.map(extract_prompt_from_conversation, remove_columns=ds.column_names)
+        # 从对话数据中提取prompt（使用Qwen3 chat template）
+        print("从对话数据中提取prompt（使用Qwen3 chat template）...")
+        if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
+            print("使用Qwen3 chat template格式化prompt")
+        ds = ds.map(lambda x: extract_prompt_from_conversation(x, tokenizer=tokenizer), remove_columns=ds.column_names)
         # 过滤空prompt
         ds = ds.filter(lambda x: len(x["prompt"].strip()) > 0)
         print(f"提取prompt后数据集大小: {len(ds)}")
@@ -312,8 +456,8 @@ def load_prompts_dataset(
             # 转换为HuggingFace Dataset格式（如果还不是）
             if hasattr(ds, "to_hf_dataset"):
                 ds = ds.to_hf_dataset()
-            # 从对话数据中提取prompt
-            ds = ds.map(extract_prompt_from_conversation, remove_columns=ds.column_names)
+            # 从对话数据中提取prompt（使用Qwen3 chat template）
+            ds = ds.map(lambda x: extract_prompt_from_conversation(x, tokenizer=tokenizer), remove_columns=ds.column_names)
             ds = ds.filter(lambda x: len(x["prompt"].strip()) > 0)
         except Exception as e:
             print(f"从ModelScope加载失败，尝试从HuggingFace加载: {e}")
@@ -374,7 +518,7 @@ def main() -> None:
     set_seed(args.seed)
 
     # Load policy model and tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -384,6 +528,7 @@ def main() -> None:
         args.model_name,
         #   torch_dtype=torch_dtype,
         # device_map="auto",
+        trust_remote_code=True,
     )
     model.gradient_checkpointing_enable()
 
@@ -404,6 +549,7 @@ def main() -> None:
         subset_name=args.subset_name,
         split="train",
         prompt_column=args.prompt_column,
+        tokenizer=tokenizer,  # 传递tokenizer以使用chat template
     )
 
     if len(train_ds) == 0:
