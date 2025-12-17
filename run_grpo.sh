@@ -20,7 +20,7 @@ LOG_FILE="${LOGS_DIR}/grpo_train_${TIMESTAMP}.log"
 
 # 训练参数配置（可根据需要修改）
 MODEL_NAME="/data/outputs-sft"
-REWARD_MODEL_NAME="/data/Skywork-Reward-V2-Qwen3-4B"
+REWARD_MODEL_NAME="/data/Skywork-Reward-V2-Qwen3-8B"
 OUTPUT_DIR="./outputs-grpo"
 DATASET=""  # 留空使用默认数据集 AI-ModelScope/COIG-CQIA
 # 子集名称配置（支持多个子集，用空格分隔）
@@ -37,7 +37,7 @@ GRADIENT_ACCUMULATION_STEPS=1
 NUM_EPOCHS=1
 NUM_GENERATIONS=2   # Samples per prompt for GRPO
 SEED=42
-MAX_STEPS=1000        # Override total training steps when dataset has no length
+MAX_STEPS=-1        # Override total training steps when dataset has no length
 MAX_PROMPT_LENGTH=256
 MAX_COMPLETION_LENGTH=128
 RM_BATCH_SIZE=32
@@ -45,7 +45,7 @@ RM_BATCH_SIZE=32
 # 奖励相关超参数（仅使用 reward model）
 
 # 训练配置
-SAVE_STEPS=100
+SAVE_STEPS=1000
 LOGGING_STEPS=10
 
 # 性能优化选项（取消注释以启用）
