@@ -22,15 +22,15 @@ LOG_FILE="${LOGS_DIR}/sft_train_${TIMESTAMP}.log"
 MODEL_NAME="/data/Qwen3-8B-Base"
 OUTPUT_DIR="/data/outputs-sft-from-base/${TIMESTAMP}"
 DATASET=""  # 留空使用默认数据集
-# JSONL文件路径配置（优先于DATASET，如果设置了LLM_JSONL，将使用该文件）
-# 示例: LLM_JSONL="llm.jsonl"  # 使用当前目录下的llm.jsonl文件
-# 示例: LLM_JSONL="/path/to/llm.jsonl"  # 使用绝对路径
-LLM_JSONL="llm.jsonl"  # 默认使用llm.jsonl文件
 # 子集名称配置（支持多个子集，用空格分隔）
 # 留空或不设置则使用所有默认子集（chinese_traditional, coig_pc, exam, finance, douban, human_value, logi_qa, ruozhiba, segmentfault, wiki, wikihow, xhs, zhihu）
 # 示例: SUBSET_NAME="coig_pc exam finance"  # 只使用指定的子集
 # 示例: SUBSET_NAME=""  # 使用所有默认子集
 SUBSET_NAME=""
+
+# JSONL文件路径配置（优先于DATASET，如果设置了LLM_JSONL，将使用该文件）
+LLM_JSONL=""
+
 TEXT_COLUMN="text"
 
 # 训练超参数
