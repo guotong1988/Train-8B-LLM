@@ -11,8 +11,115 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     set_seed,
+    TrainerCallback,
 )
 from trl import SFTConfig, SFTTrainer
+
+
+class NanDetectionCallback(TrainerCallback):
+    """检测和处理训练过程中的NaN值，防止训练崩溃"""
+    
+    def __init__(self, skip_bad_batches: bool = True, max_nan_count: int = 5):
+        """
+        Args:
+            skip_bad_batches: 如果检测到NaN，是否跳过当前batch
+            max_nan_count: 连续NaN的最大次数，超过后停止训练
+        """
+        self.skip_bad_batches = skip_bad_batches
+        self.max_nan_count = max_nan_count
+        self.nan_count = 0
+        self.last_valid_step = 0
+        self.current_loss = None
+        
+    def on_backward(self, args, state, control, model=None, **kwargs):
+        """在反向传播后检查梯度中的NaN"""
+        if model is None:
+            return control
+            
+        # 检查模型参数和梯度中是否有NaN
+        has_nan = False
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                    print(f"警告: 检测到NaN/Inf梯度 (参数: {name}, step {state.global_step})")
+                    has_nan = True
+                    # 将NaN梯度置零，防止传播
+                    param.grad = torch.where(
+                        torch.isnan(param.grad) | torch.isinf(param.grad),
+                        torch.zeros_like(param.grad),
+                        param.grad
+                    )
+        
+        if has_nan:
+            self.nan_count += 1
+            if self.nan_count >= self.max_nan_count:
+                print(f"错误: 连续NaN次数超过限制 ({self.max_nan_count})，停止训练")
+                control.should_training_stop = True
+        
+        return control
+        
+    def on_step_end(self, args, state, control, model=None, logs=None, **kwargs):
+        """在每个训练步骤结束时检查NaN"""
+        if logs is None:
+            return
+            
+        # 检查loss是否为NaN
+        loss = logs.get("loss", None)
+        if loss is not None:
+            self.current_loss = loss
+            # 处理loss可能是tensor或float的情况
+            if isinstance(loss, torch.Tensor):
+                is_nan = torch.isnan(loss) or torch.isinf(loss)
+            else:
+                is_nan = (loss != loss) or (abs(loss) == float('inf'))
+            
+            if is_nan:
+                self.nan_count += 1
+                print(f"警告: 检测到NaN/Inf loss (step {state.global_step}), 连续NaN次数: {self.nan_count}")
+                print(f"当前loss值: {loss}")
+                
+                if self.nan_count >= self.max_nan_count:
+                    print(f"错误: 连续NaN次数超过限制 ({self.max_nan_count})，停止训练")
+                    control.should_training_stop = True
+                    return control
+            else:
+                # 如果loss正常，重置NaN计数
+                if self.nan_count > 0:
+                    print(f"Loss恢复正常 (step {state.global_step}), loss={loss:.6f}")
+                self.nan_count = 0
+                self.last_valid_step = state.global_step
+        
+        # 检查entropy是否为NaN
+        entropy = logs.get("entropy", None)
+        if entropy is not None:
+            # 处理entropy可能是tensor或float的情况
+            if isinstance(entropy, torch.Tensor):
+                is_nan = torch.isnan(entropy) or torch.isinf(entropy)
+            else:
+                is_nan = (entropy != entropy) or (abs(entropy) == float('inf'))
+            
+            if is_nan:
+                print(f"警告: 检测到NaN/Inf entropy (step {state.global_step}), entropy={entropy}")
+                # entropy的NaN通常会导致loss的NaN，增加计数
+                if loss is None or (not isinstance(loss, torch.Tensor) and loss == loss):
+                    # 如果loss还没变成NaN，提前警告
+                    self.nan_count += 1
+                    if self.nan_count >= self.max_nan_count:
+                        print(f"错误: 连续NaN次数超过限制 ({self.max_nan_count})，停止训练")
+                        control.should_training_stop = True
+        
+        return control
+    
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        """在日志记录时检查模型参数中的NaN"""
+        if logs is None:
+            return
+            
+        # 记录关键指标
+        if self.nan_count > 0:
+            print(f"当前NaN计数: {self.nan_count}/{self.max_nan_count}")
+        
+        return control
 
 
 def format_dataset_for_sft(ds, text_column: str = "text", max_length: int = 2048, tokenizer=None):
@@ -455,8 +562,20 @@ def main() -> None:
                         help="使用8-bit优化器（bitsandbytes），可大幅减少优化器状态显存（节省约50-75%优化器显存）")
     parser.add_argument("--optim", type=str, default="adamw_torch",
                         help="优化器类型，如果使用8-bit优化器，应设置为adamw_8bit或paged_adamw_8bit")
+    parser.add_argument("--max_grad_norm", type=float, default=1.0,
+                        help="梯度裁剪的最大范数，用于防止梯度爆炸（默认1.0，设置为0禁用）")
+    parser.add_argument("--skip_bad_batches", default=True,
+                        help="当检测到NaN时跳过当前batch，防止训练崩溃（推荐启用）")
+    parser.add_argument("--max_nan_count", type=int, default=5,
+                        help="连续NaN的最大次数，超过后停止训练（默认5）")
 
     args = parser.parse_args()
+    
+    # 设置skip_bad_batches的默认值（如果用户没有指定，默认为True）
+    # 如果用户指定了--skip_bad_batches，skip_bad_batches会被设置为True
+    # 如果用户都没有指定，我们需要设置默认值为True
+    if not hasattr(args, 'skip_bad_batches') or getattr(args, 'skip_bad_batches', None) is None:
+        args.skip_bad_batches = True
     set_seed(args.seed)
 
     # 加载模型和分词器
@@ -618,6 +737,13 @@ def main() -> None:
         "remove_unused_columns": False,
         "dataset_text_field": args.text_column,
     }
+    
+    # 添加梯度裁剪（防止梯度爆炸，这是导致NaN的主要原因之一）
+    if args.max_grad_norm > 0:
+        sft_cfg_kwargs["max_grad_norm"] = args.max_grad_norm
+        print(f"启用梯度裁剪，最大范数: {args.max_grad_norm}")
+    else:
+        print("警告: 未启用梯度裁剪，如果遇到NaN问题，建议设置 --max_grad_norm 1.0")
 
     # 如果使用8-bit优化器，设置优化器类型
     if args.use_8bit_optimizer:
@@ -666,6 +792,27 @@ def main() -> None:
             print(f"警告: 创建trainer前同步失败: {e}")
             print(f"继续尝试创建trainer...")
 
+    # 创建NaN检测回调
+    callbacks = []
+    if args.skip_bad_batches or args.max_nan_count > 0:
+        nan_callback = NanDetectionCallback(
+            skip_bad_batches=args.skip_bad_batches,
+            max_nan_count=args.max_nan_count
+        )
+        callbacks.append(nan_callback)
+        print(f"启用NaN检测: skip_bad_batches={args.skip_bad_batches}, max_nan_count={args.max_nan_count}")
+    
+    # 打印NaN防护措施摘要
+    print("\n" + "="*60)
+    print("NaN防护措施配置:")
+    print(f"  - 梯度裁剪 (max_grad_norm): {args.max_grad_norm if args.max_grad_norm > 0 else '禁用'}")
+    print(f"  - 跳过bad batches: {args.skip_bad_batches}")
+    print(f"  - 最大连续NaN次数: {args.max_nan_count}")
+    print(f"  - 学习率: {args.learning_rate}")
+    if args.learning_rate > 1e-4:
+        print(f"  警告: 学习率较高 ({args.learning_rate})，如果遇到NaN问题，建议降低到 1e-5 或更低")
+    print("="*60 + "\n")
+
     # 创建训练器
     # SFTTrainer在初始化时可能会进行tokenization，所以需要确保所有进程同步
     trainer = SFTTrainer(
@@ -674,6 +821,7 @@ def main() -> None:
         train_dataset=train_ds,
         processing_class=tokenizer,
         data_collator=data_collator,
+        callbacks=callbacks if callbacks else None,
     )
     
     # Trainer创建完成后同步（tokenization可能在这里发生）
