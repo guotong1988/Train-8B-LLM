@@ -225,6 +225,7 @@ def format_dataset_for_sft(ds, text_column: str = "text", max_length: int = 2048
 
         # 尝试从prompt和response构建
         if "prompt" in example and "response" in example:
+            print("尝试从prompt和response构建")
             prompt = example.get("prompt", "")
             response = example.get("response", "")
             if prompt or response:
@@ -246,6 +247,7 @@ def format_dataset_for_sft(ds, text_column: str = "text", max_length: int = 2048
 
         # 尝试从input和output构建
         if "input" in example and "output" in example:
+            print("尝试从input和output构建")
             input_text = example.get("input", "")
             output_text = example.get("output", "")
             if input_text or output_text:
@@ -267,6 +269,7 @@ def format_dataset_for_sft(ds, text_column: str = "text", max_length: int = 2048
 
         # 尝试从instruction和output构建
         if "instruction" in example and "output" in example:
+            print("尝试从instruction和output构建")
             instruction = example.get("instruction", "")
             output = example.get("output", "")
             if instruction or output:
